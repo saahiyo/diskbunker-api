@@ -12,8 +12,10 @@ const ALLOWED_HOSTS = new Set([
 ]);
 
 const server = http.createServer(async (req, res) => {
+  const reqUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
   // 1. Health check
-  if (req.url === "/" || req.url === "/healthz") {
+  if (reqUrl.pathname === "/" || reqUrl.pathname === "/healthz") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: true, service: "diskbunker-tunnel" }));
     return;
@@ -30,8 +32,69 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 3. Extract target URL from query parameter or header
-  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  // 3. Diagnostics probe endpoint
+  if (reqUrl.pathname === "/test-player") {
+    const testUrl = reqUrl.searchParams.get("target") || "https://player.diskbunker.com/videos/6addf69c098a986422e68fdc/hls/stream_0/playlist.m3u8";
+    const tests = [
+      {
+        name: "chrome_clean",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": "https://diskbunker.com/",
+          "Accept": "*/*",
+        },
+      },
+      {
+        name: "chrome_watch_referer",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": "https://diskbunker.com/watch/69d5abd3e9b483a250dc8a49",
+          "Accept": "*/*",
+        },
+      },
+      {
+        name: "okhttp_clean",
+        headers: {
+          "User-Agent": "okhttp/4.12.0",
+          "Referer": "https://diskbunker.com/",
+          "Accept": "*/*",
+        },
+      },
+      {
+        name: "curl_clean",
+        headers: {
+          "User-Agent": "curl/8.4.0",
+          "Referer": "https://diskbunker.com/",
+        },
+      },
+    ];
+
+    const results = [];
+    for (const t of tests) {
+      try {
+        const resp = await fetch(testUrl, {
+          method: "GET",
+          headers: t.headers,
+          signal: AbortSignal.timeout(6000),
+        });
+        const text = await resp.text();
+        results.push({
+          name: t.name,
+          status: resp.status,
+          title: text.match(/<title>(.*?)<\/title>/i)?.[1] ?? null,
+          preview: text.slice(0, 100),
+        });
+      } catch (err) {
+        results.push({ name: t.name, error: err.message });
+      }
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: true, results }));
+    return;
+  }
+
+  // 4. Extract target URL from query parameter or header
   const targetUrlStr = reqUrl.searchParams.get("url") || req.headers["x-target-url"];
 
   if (!targetUrlStr) {
@@ -58,14 +121,21 @@ const server = http.createServer(async (req, res) => {
   try {
     // Construct clean forward headers
     const forwardHeaders = {
-      "User-Agent": "okhttp/4.12.0",
-      "Accept": req.headers["accept"] || "application/json",
-      "Referer": "https://diskbunker.com/",
-      "Origin": "https://diskbunker.com",
+      "User-Agent":
+        req.headers["x-custom-ua"] ||
+        (targetUrl.hostname === "api.diskbunker.com"
+          ? "okhttp/4.12.0"
+          : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+      "Accept": req.headers["accept"] && req.headers["accept"] !== "application/json" ? req.headers["accept"] : "*/*",
+      "Referer": req.headers["x-custom-referer"] || "https://diskbunker.com/",
     };
 
     if (req.headers["range"]) {
       forwardHeaders["Range"] = req.headers["range"];
+    }
+
+    if (req.headers["origin"]) {
+      forwardHeaders["Origin"] = req.headers["origin"];
     }
 
     const upstreamRes = await fetch(targetUrl.href, {

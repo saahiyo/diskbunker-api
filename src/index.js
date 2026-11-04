@@ -12,7 +12,12 @@ const DEFAULT_UPSTREAM_HEADERS = {
   "Accept": "application/json",
   "Referer": "https://diskbunker.com/",
   "Origin": "https://diskbunker.com",
-  "cf-worker": "",
+};
+
+const MEDIA_UPSTREAM_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "*/*",
+  "Referer": "https://diskbunker.com/",
 };
 
 function isAllowedMediaHost(hostname) {
@@ -169,8 +174,11 @@ async function decryptStreamTarget(token, key) {
 }
 
 async function fetchUpstream(targetUrl, env, init = {}) {
-  // If a Render forward proxy is configured, route via the proxy
-  if (env.FORWARD_PROXY_URL && typeof env.FORWARD_PROXY_URL === "string" && env.FORWARD_PROXY_URL.trim()) {
+  // Only route api.diskbunker.com through the Render tunnel
+  // Media files on player.diskbunker.com and CDNs work directly from Cloudflare Worker!
+  const isApiHost = targetUrl.hostname === "api.diskbunker.com";
+
+  if (isApiHost && env.FORWARD_PROXY_URL && typeof env.FORWARD_PROXY_URL === "string" && env.FORWARD_PROXY_URL.trim()) {
     const proxyBase = env.FORWARD_PROXY_URL.trim().replace(/\/+$/, "");
     const proxyUrl = new URL(proxyBase);
     proxyUrl.searchParams.set("url", targetUrl.href);
@@ -185,7 +193,7 @@ async function fetchUpstream(targetUrl, env, init = {}) {
     });
   }
 
-  // Fallback to direct fetch
+  // Direct fetch for player.diskbunker.com media & video segments
   return fetch(targetUrl, init);
 }
 
@@ -587,7 +595,7 @@ async function proxyHls(request, env) {
 
   const range = request.headers.get("Range");
   const ifRange = request.headers.get("If-Range");
-  const requestHeaders = new Headers(DEFAULT_UPSTREAM_HEADERS);
+  const requestHeaders = new Headers(MEDIA_UPSTREAM_HEADERS);
   if (range) requestHeaders.set("Range", range);
   if (ifRange) requestHeaders.set("If-Range", ifRange);
 
