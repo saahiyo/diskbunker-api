@@ -1,0 +1,12 @@
+# Required: Secret for AES-GCM stream token encryption (at least 32 characters)
+STREAM_TOKEN_SECRET=replace-with-at-least-32-random-characters
+
+# Required: API key for authenticating /api/watch and /api/resolve
+API_KEY=dev-secret-api-key-12345
+
+# Optional: Comma-separated list of additional valid API keys
+# API_KEYS=dev-key-1,dev-key-2
+
+# Optional: Rate limit configuration (default: 60 requests per 60 seconds)
+# RATE_LIMIT_MAX=60
+# RATE_LIMIT_WINDOW_SECONDS=60
