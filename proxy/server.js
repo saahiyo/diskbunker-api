@@ -14,8 +14,10 @@ const ALLOWED_HOSTS = new Set([
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
-  // 1. Health check
-  if (reqUrl.pathname === "/" || reqUrl.pathname === "/healthz") {
+  // 1. Health check (only when no proxy target is provided)
+  const targetUrlStr = reqUrl.searchParams.get("url") || req.headers["x-target-url"];
+
+  if ((reqUrl.pathname === "/" || reqUrl.pathname === "/healthz") && !targetUrlStr) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: true, service: "diskbunker-tunnel" }));
     return;
@@ -95,8 +97,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 4. Extract target URL from query parameter or header
-  const targetUrlStr = reqUrl.searchParams.get("url") || req.headers["x-target-url"];
-
   if (!targetUrlStr) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: false, error: "missing_target_url" }));
