@@ -528,15 +528,27 @@ async function resolveWatch(slug, request, env, extraHeaders = {}) {
       if (expiresAt <= Math.floor(Date.now() / 1000)) {
         return fail(502, "expired_stream_url", "The watch service returned an expired stream URL.", extraHeaders);
       }
+      const rawUpstreamHlsUrl = hlsUrl.href;
       const token = await encryptStreamTarget(hlsUrl, expiresAt, key);
-      data.video.hlsUrl = proxiedUrl(new URL(request.url).origin, token, hlsUrl, "m3u8");
+      const proxiedHls = proxiedUrl(new URL(request.url).origin, token, hlsUrl, "m3u8");
+      data.video.proxiedHlsUrl = proxiedHls;
+      data.video.directHlsUrl = rawUpstreamHlsUrl;
+      const reqUrl = new URL(request.url);
+      if (reqUrl.searchParams.get("direct") === "1" || reqUrl.searchParams.get("mode") === "direct") {
+        data.video.hlsUrl = rawUpstreamHlsUrl;
+      } else {
+        data.video.hlsUrl = proxiedHls;
+      }
     } else {
       data.video.hlsUrl = null;
+      data.video.directHlsUrl = null;
+      data.video.proxiedHlsUrl = null;
     }
 
     if (typeof data.video.thumbnail === "string" && data.video.thumbnail) {
       try {
         const thumbUrl = validateMediaUrl(data.video.thumbnail);
+        data.video.rawThumbnail = thumbUrl.href;
         const expiresAt = Math.floor(Date.now() / 1000) + MAX_STREAM_TOKEN_SECONDS;
         const token = await encryptStreamTarget(thumbUrl, expiresAt, key);
         data.video.thumbnail = proxiedUrl(new URL(request.url).origin, token, thumbUrl, "jpg");
@@ -548,6 +560,7 @@ async function resolveWatch(slug, request, env, extraHeaders = {}) {
     if (isRecord(data.link) && typeof data.link.creatorAvatar === "string" && data.link.creatorAvatar) {
       try {
         const avatarUrl = validateMediaUrl(data.link.creatorAvatar);
+        data.link.rawCreatorAvatar = avatarUrl.href;
         const expiresAt = Math.floor(Date.now() / 1000) + MAX_STREAM_TOKEN_SECONDS;
         const token = await encryptStreamTarget(avatarUrl, expiresAt, key);
         data.link.creatorAvatar = proxiedUrl(new URL(request.url).origin, token, avatarUrl, "jpg");
