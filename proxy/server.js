@@ -1,7 +1,40 @@
+import crypto from "node:crypto";
 import http from "node:http";
 
 const PORT = process.env.PORT || 3000;
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET || "";
+
+if (!TUNNEL_SECRET) {
+  console.error("TUNNEL_SECRET is required. Refusing to start an unauthenticated proxy.");
+  process.exit(1);
+}
+
+// Response headers that must not be copied: hop-by-hop headers, plus framing
+// headers that no longer match because Node's fetch decompresses the body.
+const STRIPPED_RESPONSE_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "content-encoding",
+  "content-length",
+  "content-security-policy",
+]);
+
+function isAllowedTarget(url) {
+  return url.protocol === "https:" && ALLOWED_HOSTS.has(url.hostname) && !url.username && !url.password;
+}
+
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 // Allowed upstream hosts to prevent open proxy abuse
 const ALLOWED_HOSTS = new Set([
@@ -23,20 +56,31 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Secret authentication (if TUNNEL_SECRET is configured)
-  if (TUNNEL_SECRET) {
-    const authHeader = req.headers["x-tunnel-secret"] || req.headers["authorization"];
-    const token = authHeader?.replace(/^Bearer\s+/i, "");
-    if (token !== TUNNEL_SECRET) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: false, error: "unauthorized" }));
-      return;
-    }
+  // 2. Secret authentication (always required)
+  const authHeader = req.headers["x-tunnel-secret"] || req.headers["authorization"];
+  const token = authHeader?.replace(/^Bearer\s+/i, "") ?? "";
+  if (!safeEqual(token, TUNNEL_SECRET)) {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: false, error: "unauthorized" }));
+    return;
   }
 
-  // 3. Diagnostics probe endpoint
+  // 3. Diagnostics probe endpoint (allowlisted hosts only)
   if (reqUrl.pathname === "/test-player") {
-    const testUrl = reqUrl.searchParams.get("target") || "https://player.diskbunker.com/videos/6addf69c098a986422e68fdc/hls/stream_0/playlist.m3u8";
+    const testUrlStr = reqUrl.searchParams.get("target") || "https://player.diskbunker.com/videos/6addf69c098a986422e68fdc/hls/stream_0/playlist.m3u8";
+    let testUrl;
+    try {
+      testUrl = new URL(testUrlStr);
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: false, error: "invalid_target_url" }));
+      return;
+    }
+    if (!isAllowedTarget(testUrl)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: false, error: "host_not_allowed" }));
+      return;
+    }
     const tests = [
       {
         name: "chrome_clean",
@@ -74,9 +118,10 @@ const server = http.createServer(async (req, res) => {
     const results = [];
     for (const t of tests) {
       try {
-        const resp = await fetch(testUrl, {
+        const resp = await fetch(testUrl.href, {
           method: "GET",
           headers: t.headers,
+          redirect: "manual",
           signal: AbortSignal.timeout(6000),
         });
         const text = await resp.text();
@@ -112,7 +157,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (targetUrl.protocol !== "https:" || !ALLOWED_HOSTS.has(targetUrl.hostname)) {
+  if (!isAllowedTarget(targetUrl)) {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ success: false, error: "host_not_allowed" }));
     return;
@@ -141,12 +186,14 @@ const server = http.createServer(async (req, res) => {
     const upstreamRes = await fetch(targetUrl.href, {
       method: req.method,
       headers: forwardHeaders,
+      // Never follow redirects here: the Worker re-validates every Location hop.
+      redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     });
 
     const responseHeaders = {};
     for (const [key, value] of upstreamRes.headers.entries()) {
-      if (!["content-encoding", "content-security-policy"].includes(key.toLowerCase())) {
+      if (!STRIPPED_RESPONSE_HEADERS.has(key.toLowerCase())) {
         responseHeaders[key] = value;
       }
     }

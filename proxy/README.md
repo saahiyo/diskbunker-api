@@ -12,7 +12,7 @@ A zero-dependency Node.js forward proxy designed to be deployed on **Render** (F
      - **Start Command**: `node server.js`
 3. **Environment Variables**:
    - `PORT`: `3000` (Render sets this automatically)
-   - `TUNNEL_SECRET`: `(optional)` Set a secret token (e.g. `my-tunnel-secret`) to restrict access only to your Cloudflare Worker.
+   - `TUNNEL_SECRET`: **(required)** A long random token that restricts access to your Cloudflare Worker. The server refuses to start without it. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
 ## Connecting to Your Cloudflare Worker
 
@@ -23,7 +23,7 @@ npx wrangler secret put FORWARD_PROXY_URL
 # Enter: https://my-diskbunker-tunnel.onrender.com
 
 npx wrangler secret put FORWARD_PROXY_SECRET
-# Enter: your-tunnel-secret (if configured)
+# Enter: the same value as TUNNEL_SECRET
 ```
 
 The Worker will automatically route upstream watch lookups through your Render proxy!
